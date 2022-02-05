@@ -9,6 +9,7 @@ use tower::Service;
 
 #[tokio::main]
 async fn main() {
+    std::env::set_var("RUST_LOG", "tower_explorer=DEBUG");
     env_logger::init();
     let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 3000);
     let make_service =
@@ -32,7 +33,7 @@ impl Service<Request<Body>> for HelloWorld {
     type Response = Response<Body>;
     type Error = Infallible;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
     fn call(&mut self, req: Request<Body>) -> Self::Future {
