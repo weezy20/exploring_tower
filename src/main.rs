@@ -1,8 +1,9 @@
+#![allow(unused_imports)]
 use futures::future::{ready, BoxFuture, Ready};
-#[allow(unused)]
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
 use std::convert::Infallible;
+use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::task::{Context, Poll};
 use tower::Service;
@@ -18,13 +19,18 @@ async fn main() {
         // ServiceFn<T> implements Service trait
         // where T: FnMut(Request) -> F,
         // F: Future<Output = Result<R, E>>
-        make_service_fn(|_conn| async { Ok::<_, Infallible>(HelloWorld) });
+        make_service_fn(|_conn| async { 
+            // We change our service from HelloWorld to Logger<HelloWorld> to ensure
+            // that HelloWorld is called through our Logging service
+            let service = Logger::new(HelloWorld);
+            Ok::<_, Infallible>(service) });
     let server = Server::bind(&socket).serve(make_service);
     if let Err(e) = server.await {
         eprintln!("Server Error : {e}");
     }
 }
-
+// Doesn't contain any data so clones and copies are trivial
+#[derive(Clone, Copy)]
 struct HelloWorld;
 
 // Implement for a regular HTTP request
@@ -32,20 +38,69 @@ struct HelloWorld;
 impl Service<Request<Body>> for HelloWorld {
     type Response = Response<Body>;
     type Error = Infallible;
-    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
+    type Future = Ready<Result<Self::Response, Self::Error>>;
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
-        log::debug!(
-            "Received {method} {uri} request",
-            method = req.method(),
-            uri = req.uri().path()
-        );
-        // Perform an allocation, give the type a concrete definition, BoxFuture in this case, 
-        // since async {} are opaque unnameable types
-        Box::pin(
-            async { Ok(Response::new(Body::from("Hello World from immediate future",))) }
+    // Problem that we are trying to solve is how to implement logging in a tower service
+    // when services can be layered. Also we want to avoid allocation on every request.
+    fn call(&mut self, _req: Request<Body>) -> Self::Future {
+        ready(
+           Ok(Response::new(Body::from("Hello World from immediate future",))) 
         )
+    }
+}
+
+// We start by first building a middleware for our HelloWorld service that will implement
+// the logging functionality
+// We had to include PhantomData to include the trait bound on `Service` generic
+#[derive(Clone, Copy)]
+struct Logger<T, Service: tower::Service<T>> {
+    inner: Service,
+    _service_generic : std::marker::PhantomData<T>
+}
+impl<T, S: tower::Service<T>> Logger<T, S> {
+    fn new(inner: S) -> Self {
+        Self { inner, _service_generic: PhantomData::<T> }
+    }
+}
+// We don't care about the body type <B>, and so our Logger Service is generic over Request<B>
+impl<S, B> Service<Request<B>> for Logger<Request<B>, S>
+where
+    S: Service<Request<B>> + Clone + Send + 'static,
+    B: Send + 'static,
+    S::Future : 'static + Send,
+    {
+    // Logging takes the inner service, and just runs a timer to wait its completion, logs
+    // the result and then returns the response of the inner service
+    type Response = S::Response;
+    type Error = S::Error;
+    // type Future = S::Future; // Replace this line
+    type Future = BoxFuture<'static , Result<S::Response, S::Error>>; // With this one
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<B>) -> Self::Future {
+        // since we are mutably borrowing self
+        let mut inner = self.inner.clone();
+        let (method, uri) = (req.method().clone(), req.uri().clone());
+        Box::pin(async move {
+
+            log::debug!("Received {method} {uri} request",);
+    
+            // Now we have a problem. If we are logging before and after calling the inner service 
+            // How do we return the future as a future? BoxFuture to the Rescue. We change type Future = S::Future to 
+            // type Future = BoxFuture;
+            // Next instead of returning the inner future we await it, then wrap the entire computation in a BoxFuture and
+            // return it as the result of Logger::call
+            let response = inner.call(req).await;
+    
+            log::debug!("Finished processing {method} {uri} request",);
+
+            response
+        })
+        
     }
 }
