@@ -8,6 +8,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::task::{Context, Poll};
 use tower::Service;
 
+static mut LOG_ID : u32 = 0;
+
 #[tokio::main]
 async fn main() {
     std::env::set_var("RUST_LOG", "tower_explorer=DEBUG");
@@ -22,7 +24,16 @@ async fn main() {
         make_service_fn(|_conn| async { 
             // We change our service from HelloWorld to Logger<HelloWorld> to ensure
             // that HelloWorld is called through our Logging service
+
+            // We can wrap one service in another to see how services tower
+            // For this we get rid of the trait bounds in our previous commit
+            let service = HelloWorld;
             let service = Logger::new(HelloWorld);
+            let service = Logger::new(service);
+            let service = Logger::new(service);
+            let service = Logger::new(service);
+            let service = Logger::new(service);
+
             Ok::<_, Infallible>(service) });
     let server = Server::bind(&socket).serve(make_service);
     if let Err(e) = server.await {
@@ -55,20 +66,19 @@ impl Service<Request<Body>> for HelloWorld {
 // the logging functionality
 // We had to include PhantomData to include the trait bound on `Service` generic
 #[derive(Clone, Copy)]
-struct Logger<T, Service: tower::Service<T>> {
+struct Logger<Service> {
     inner: Service,
-    _service_generic : std::marker::PhantomData<T>
 }
-impl<T, S: tower::Service<T>> Logger<T, S> {
+impl<S> Logger<S> {
     fn new(inner: S) -> Self {
-        Self { inner, _service_generic: PhantomData::<T> }
+        Self { inner }
     }
 }
-// We don't care about the body type <B>, and so our Logger Service is generic over Request<B>
-impl<S, B> Service<Request<B>> for Logger<Request<B>, S>
+
+impl<S,B> Service<Request<B>> for Logger<S>
 where
     S: Service<Request<B>> + Clone + Send + 'static,
-    B: Send + 'static,
+    B: Send + 'static ,
     S::Future : 'static + Send,
     {
     // Logging takes the inner service, and just runs a timer to wait its completion, logs
@@ -87,8 +97,12 @@ where
         let mut inner = self.inner.clone();
         let (method, uri) = (req.method().clone(), req.uri().clone());
         Box::pin(async move {
-
-            log::debug!("Received {method} {uri} request",);
+            let log_id = unsafe { 
+                let log_id = LOG_ID + 1;
+                LOG_ID = log_id;
+                log_id
+             };
+            log::debug!("Received {method} {uri} request from LOGGER ID {log_id}");
     
             // Now we have a problem. If we are logging before and after calling the inner service 
             // How do we return the future as a future? BoxFuture to the Rescue. We change type Future = S::Future to 
@@ -97,10 +111,11 @@ where
             // return it as the result of Logger::call
             let response = inner.call(req).await;
     
-            log::debug!("Finished processing {method} {uri} request",);
+            log::debug!("Finished processing {method} {uri} request from LOGGER ID {log_id}");
 
             response
         })
         
     }
 }
+ 
