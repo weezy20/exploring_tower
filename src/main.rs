@@ -1,4 +1,4 @@
-use futures::future::{ready, Ready, BoxFuture};
+use futures::future::{ready, BoxFuture, Ready};
 #[allow(unused)]
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
@@ -24,21 +24,27 @@ async fn main() {
     }
 }
 
-
 struct HelloWorld;
 
-// Implement for a regular HTTP request 
+// Implement for a regular HTTP request
+#[rustfmt::skip]
 impl Service<Request<Body>> for HelloWorld {
     type Response = Response<Body>;
     type Error = Infallible;
-    type Future = Ready<Result<Self::Response, Self::Error>>;
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        log::debug!("Received {method} {uri} request", method = req.method(), uri = req.uri().path());
-        ready(Ok(Response::new(Body::from(
-            "Hello World from immediate future",
-        ))))
+        log::debug!(
+            "Received {method} {uri} request",
+            method = req.method(),
+            uri = req.uri().path()
+        );
+        // Perform an allocation, give the type a concrete definition, BoxFuture in this case, 
+        // since async {} are opaque unnameable types
+        Box::pin(
+            async { Ok(Response::new(Body::from("Hello World from immediate future",))) }
+        )
     }
 }
