@@ -3,6 +3,7 @@ use futures::Future;
 use futures::future::{FutureExt, ready, BoxFuture, Ready, self, Map};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
+use rand::rngs::adapter::ReseedingRng;
 use serde_json::Value;
 use std::convert::Infallible;
 use std::marker::PhantomData;
@@ -17,6 +18,17 @@ async fn shutdown_signal() {
     .await
     .expect("failed to install CTRL+C signal handler");
     log::warn!("Shutting down");
+}
+
+async fn lazy_function(_req : Request<Body>) -> Result<Response<Body>, Infallible> {
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    Ok(
+        Response::new(
+            Body::from(
+                "Hello from lazy function"
+            )
+        )
+    )
 }
 
 #[tokio::main]
@@ -37,6 +49,7 @@ async fn main() {
             // We can wrap one service in another to see how services tower
             // For this we get rid of the trait bounds in our previous commit
             let service = HelloWorld;
+            let service = service_fn(lazy_function);
             let service = Logger::new(service);
             // let service = Logger::new(service);
             // let service = Logger::new(service);
@@ -109,7 +122,7 @@ where
         // since we are mutably borrowing self
         // let inner = self.inner.clone();
         let (method, uri) = (req.method().clone(), req.uri().clone());
-
+        // todo! rejigg this for non HTTP services
         let mut data = serde_json::Map::new();
         data.insert("method".to_string(), Value::from(method.as_str()));
         data.insert("uri".to_string(), Value::from(uri.path()));
@@ -163,9 +176,12 @@ impl<F: Future> Future for LoggerFuture<F> {
         // Start polling the inner future
         if let Poll::Ready(fut) = inner.poll(cx) {
             let end = tokio::time::Instant::now();
-            let duration = (end - start).as_nanos();
+            let duration = (end - start).as_millis();
             log::info!("{}", log_success_str);
-            log::debug!("Operation took {duration} nanoseconds");
+            // We set our lazy function to take 2 seconds but logs show 0 milliseconds. WHY?
+            // Because we are creating the timer from within our LoggerFuture which may be put to sleep 
+            // while it's being awaited
+            log::debug!("Operation took {duration:?} milliseconds");
             Poll::Ready(fut)
         } else { 
             Poll::Pending
