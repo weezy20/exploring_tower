@@ -3,6 +3,7 @@ use futures::Future;
 use futures::future::{FutureExt, ready, BoxFuture, Ready, self, Map};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
+use serde_json::Value;
 use std::convert::Infallible;
 use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -100,15 +101,28 @@ where
         // since we are mutably borrowing self
         // let inner = self.inner.clone();
         let (method, uri) = (req.method().clone(), req.uri().clone());
+
+        let mut data = serde_json::Map::new();
+        data.insert("method".to_string(), Value::from(method.as_str()));
+        data.insert("uri".to_string(), Value::from(uri.path()));
+        let extra_service_info = Some(ServiceInfo { data });
+
         let log_id : u64 = rand::random();
         log::debug!("Received {method} {uri} request, dispatch log id: {log_id}");
 
-       LoggerFuture {log_id, f : self.inner.call(req) }
+       LoggerFuture { extra_service_info, log_id, f : self.inner.call(req) }
        
     }
 }
+#[derive(Clone)]
+struct ServiceInfo {
+    data: serde_json::Map<String, Value>
+}
+
+
 #[pin_project::pin_project]
 struct LoggerFuture<InnerServiceFuture: Future> {
+    extra_service_info : Option<ServiceInfo>,
     log_id: u64,
     #[pin]
     f: InnerServiceFuture
@@ -118,11 +132,30 @@ impl<F: Future> Future for LoggerFuture<F> {
     type Output = <F as Future>::Output;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let log_id = self.log_id;
-        let inner = self.project().f;
-        if let Poll::Ready(some) = inner.poll(cx) {
-            log::debug!("Request number {log_id} processed successfully!");
-            Poll::Ready(some)
-        } else { Poll::Pending }
+        // If our service is an HTTP service, we require this metadata
+        let (mut metadata_init , mut method, mut uri) = (false, Value::default(), Value::default());
+        if let Some(ref metadata) = self.extra_service_info {
+        
+            method = metadata.data.get("method").unwrap().clone();
+                 uri =   metadata.data.get("uri").unwrap().clone();
+                 metadata_init = true;
+    
+        }
+        // If inner service is a HTTP service 
+        let log_success_str = if metadata_init {
+            format!("HTTP Request {method} {uri} processed successfully from logger id {log_id}")
+        } else {
+            format!("Request processed successfully from logger id {log_id}")
+        };
+
+        let inner = self.project().f; // Move occurs here so we must get the metadata before 
+        
+        if let Poll::Ready(fut) = inner.poll(cx) {
+            log::debug!("{}", log_success_str);
+            Poll::Ready(fut)
+        } else { 
+            Poll::Pending
+        }
     }
 
 }

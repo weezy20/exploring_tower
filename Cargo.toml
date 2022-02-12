@@ -13,5 +13,6 @@ hyper = {version = "0.14.16", features = ["server", "tcp", "client", "http1"]}
 log = "0.4"
 pin-project = "1.0.10"
 rand = "0.8.4"
+serde_json = "1.0.79"
 tokio = {version = "1.0", features = ["full"]}
 tower = "0.4.11"
