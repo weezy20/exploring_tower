@@ -1,14 +1,15 @@
 #![allow(unused_imports)]
-use futures::future::{ready, BoxFuture, Ready};
+use futures::Future;
+use futures::future::{FutureExt, ready, BoxFuture, Ready, self, Map};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
 use std::convert::Infallible;
 use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::pin::Pin;
 use std::task::{Context, Poll};
 use tower::Service;
 
-static mut LOG_ID : u32 = 0;
 
 #[tokio::main]
 async fn main() {
@@ -28,7 +29,7 @@ async fn main() {
             // We can wrap one service in another to see how services tower
             // For this we get rid of the trait bounds in our previous commit
             let service = HelloWorld;
-            let service = Logger::new(HelloWorld);
+            let service = Logger::new(service);
             let service = Logger::new(service);
             let service = Logger::new(service);
             let service = Logger::new(service);
@@ -75,19 +76,18 @@ impl<S> Logger<S> {
     }
 }
 
-impl<S,B> Service<Request<B>> for Logger<S>
+impl<InnerService,B> Service<Request<B>> for Logger<InnerService>
 where
-    S: Service<Request<B>> + Clone + Send + 'static,
+    InnerService: Service<Request<B>> + Clone + Send + 'static,
     B: Send + 'static ,
-    S::Future : 'static + Send,
+    InnerService::Future : 'static + Send + Unpin,
     {
     // Logging takes the inner service, and just runs a timer to wait its completion, logs
     // the result and then returns the response of the inner service
-    type Response = S::Response;
-    type Error = S::Error;
-    // type Future = S::Future; // Replace this line
-    type Future = BoxFuture<'static , Result<S::Response, S::Error>>; // With this one
-
+    type Response = InnerService::Response;
+    type Error = InnerService::Error;
+    type Future = LoggerFuture<InnerService::Future>;
+        
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
@@ -97,28 +97,26 @@ where
         // since we are mutably borrowing self
         let mut inner = self.inner.clone();
         let (method, uri) = (req.method().clone(), req.uri().clone());
-        // Creating a Box is an allocation , so imagine a hundred nested requests, which maybe possible
-        // for a Logger service, and imagine each have their own BoxFuture, allocations can deter performance
-        Box::pin(async move {
-            let log_id = unsafe { 
-                let log_id = LOG_ID + 1;
-                LOG_ID = log_id;
-                log_id
-             };
-            log::debug!("Received {method} {uri} request from LOGGER ID {log_id}");
-    
-            // Now we have a problem. If we are logging before and after calling the inner service 
-            // How do we return the future as a future? BoxFuture to the Rescue. We change type Future = S::Future to 
-            // type Future = BoxFuture;
-            // Next instead of returning the inner future we await it, then wrap the entire computation in a BoxFuture and
-            // return it as the result of Logger::call
-            let response = inner.call(req).await;
-    
-            log::debug!("Finished processing {method} {uri} request from LOGGER ID {log_id}");
+        log::debug!("Received {method} {uri} request");
 
-            response
-        })
-        
+       LoggerFuture {f : self.inner.call(req) }
+       
     }
 }
- 
+
+struct LoggerFuture<InnerServiceFuture: Future> {
+    f: InnerServiceFuture
+}
+
+impl<F: Future + Unpin> Future for LoggerFuture<F> {
+    type Output = <F as Future>::Output;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Poll::Ready(res) = Pin::new(&mut self.f).poll(cx) {
+            log::debug!("Finished processing request");
+            Poll::Ready(res)
+        } else {
+            Poll::Pending
+        }
+    }
+
+}
