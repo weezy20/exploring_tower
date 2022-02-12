@@ -50,6 +50,7 @@ struct HelloWorld;
 impl Service<Request<Body>> for HelloWorld {
     type Response = Response<Body>;
     type Error = Infallible;
+    // Ready is Unpin so it works with our current LoggerFuture
     type Future = Ready<Result<Self::Response, Self::Error>>;
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
