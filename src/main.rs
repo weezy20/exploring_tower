@@ -81,7 +81,9 @@ impl<InnerService,B> Service<Request<B>> for Logger<InnerService>
 where
     InnerService: Service<Request<B>> + Clone + Send + 'static,
     B: Send + 'static ,
-    InnerService::Future : 'static + Send + Unpin,
+    // We shouldn't impose Unpin on InnerService because ServiceFn<_> which 
+    // is created by hyper's serve_fn isn't Unpin, so those services won't work with our logger
+    InnerService::Future : 'static + Send + Unpin, 
     {
     // Logging takes the inner service, and just runs a timer to wait its completion, logs
     // the result and then returns the response of the inner service
@@ -104,20 +106,16 @@ where
        
     }
 }
-
+#[pin_project::pin_project]
 struct LoggerFuture<InnerServiceFuture: Future> {
+    #[pin]
     f: InnerServiceFuture
 }
 
 impl<F: Future + Unpin> Future for LoggerFuture<F> {
     type Output = <F as Future>::Output;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Poll::Ready(res) = Pin::new(&mut self.f).poll(cx) {
-            log::debug!("Finished processing request");
-            Poll::Ready(res)
-        } else {
-            Poll::Pending
-        }
+        
     }
 
 }
