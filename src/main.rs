@@ -92,6 +92,7 @@ where
         self.inner.poll_ready(cx)
     }
 
+    /// Return the Future of the wrapped service, while logging
     fn call(&mut self, req: Request<B>) -> Self::Future {
         // since we are mutably borrowing self
         let mut inner = self.inner.clone();
