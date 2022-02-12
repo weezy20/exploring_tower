@@ -11,6 +11,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tower::Service;
 
+async fn shutdown_signal() {
+    // Wait for the CTRL+C signal
+    tokio::signal::ctrl_c()
+    .await
+    .expect("failed to install CTRL+C signal handler");
+    log::warn!("Shutting down");
+}
 
 #[tokio::main]
 async fn main() {
@@ -31,13 +38,15 @@ async fn main() {
             // For this we get rid of the trait bounds in our previous commit
             let service = HelloWorld;
             let service = Logger::new(service);
-            let service = Logger::new(service);
-            let service = Logger::new(service);
-            let service = Logger::new(service);
-            let service = Logger::new(service);
+            // let service = Logger::new(service);
+            // let service = Logger::new(service);
+            // let service = Logger::new(service);
+            // let service = Logger::new(service);
 
             Ok::<_, Infallible>(service) });
-    let server = Server::bind(&socket).serve(make_service);
+    let server = Server::bind(&socket)
+                        .serve(make_service)
+                        .with_graceful_shutdown(shutdown_signal());
     if let Err(e) = server.await {
         eprintln!("Server Error : {e}");
     }
@@ -47,7 +56,6 @@ async fn main() {
 struct HelloWorld;
 
 // Implement for a regular HTTP request
-#[rustfmt::skip]
 impl Service<Request<Body>> for HelloWorld {
     type Response = Response<Body>;
     type Error = Infallible;
@@ -108,7 +116,7 @@ where
         let extra_service_info = Some(ServiceInfo { data });
 
         let log_id : u64 = rand::random();
-        log::debug!("Received {method} {uri} request, dispatch log id: {log_id}");
+        log::info!("Received {method} {uri} request, dispatch log id: {log_id}");
 
        LoggerFuture { extra_service_info, log_id, f : self.inner.call(req) }
        
@@ -121,6 +129,8 @@ struct ServiceInfo {
 
 
 #[pin_project::pin_project]
+/// Our own future provides concrete type definitions 
+/// which avoids BoxFuture heap allocs 
 struct LoggerFuture<InnerServiceFuture: Future> {
     extra_service_info : Option<ServiceInfo>,
     log_id: u64,
@@ -149,9 +159,13 @@ impl<F: Future> Future for LoggerFuture<F> {
         };
 
         let inner = self.project().f; // Move occurs here so we must get the metadata before 
-        
+        let start = tokio::time::Instant::now();
+        // Start polling the inner future
         if let Poll::Ready(fut) = inner.poll(cx) {
-            log::debug!("{}", log_success_str);
+            let end = tokio::time::Instant::now();
+            let duration = (end - start).as_nanos();
+            log::info!("{}", log_success_str);
+            log::debug!("Operation took {duration} nanoseconds");
             Poll::Ready(fut)
         } else { 
             Poll::Pending
