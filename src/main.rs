@@ -100,22 +100,29 @@ where
         // since we are mutably borrowing self
         let mut inner = self.inner.clone();
         let (method, uri) = (req.method().clone(), req.uri().clone());
-        log::debug!("Received {method} {uri} request");
+        let log_id : u64 = rand::random();
+        log::debug!("Received {method} {uri} request, dispatch log id: {log_id}");
 
-       LoggerFuture {f : self.inner.call(req) }
+       LoggerFuture {log_id, f : self.inner.call(req) }
        
     }
 }
 #[pin_project::pin_project]
 struct LoggerFuture<InnerServiceFuture: Future> {
+    log_id: u64,
     #[pin]
     f: InnerServiceFuture
 }
 
 impl<F: Future + Unpin> Future for LoggerFuture<F> {
     type Output = <F as Future>::Output;
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let log_id = self.log_id;
+        let inner = self.project().f;
+        if let Poll::Ready(some) = inner.poll(cx) {
+            log::debug!("Request number {log_id} processed successfully!");
+            Poll::Ready(some)
+        } else { Poll::Pending }
     }
 
 }
