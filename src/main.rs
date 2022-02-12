@@ -83,7 +83,7 @@ where
     B: Send + 'static ,
     // We shouldn't impose Unpin on InnerService because ServiceFn<_> which 
     // is created by hyper's serve_fn isn't Unpin, so those services won't work with our logger
-    InnerService::Future : 'static + Send + Unpin, 
+    InnerService::Future : 'static + Send, 
     {
     // Logging takes the inner service, and just runs a timer to wait its completion, logs
     // the result and then returns the response of the inner service
@@ -98,7 +98,7 @@ where
     /// Return the Future of the wrapped service, while logging
     fn call(&mut self, req: Request<B>) -> Self::Future {
         // since we are mutably borrowing self
-        let mut inner = self.inner.clone();
+        // let inner = self.inner.clone();
         let (method, uri) = (req.method().clone(), req.uri().clone());
         let log_id : u64 = rand::random();
         log::debug!("Received {method} {uri} request, dispatch log id: {log_id}");
@@ -114,7 +114,7 @@ struct LoggerFuture<InnerServiceFuture: Future> {
     f: InnerServiceFuture
 }
 
-impl<F: Future + Unpin> Future for LoggerFuture<F> {
+impl<F: Future> Future for LoggerFuture<F> {
     type Output = <F as Future>::Output;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let log_id = self.log_id;
