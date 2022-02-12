@@ -20,7 +20,7 @@ async fn main() {
         // service_fn is a re-export of tower::service_fn(f: T) -> ServiceFn<T>
         // ServiceFn<T> implements Service trait
         // where T: FnMut(Request) -> F,
-        // F: Future<Output = Result<R, E>>
+        // F: Future<Output = Result<Response, E>>
         make_service_fn(|_conn| async { 
             // We change our service from HelloWorld to Logger<HelloWorld> to ensure
             // that HelloWorld is called through our Logging service
@@ -63,8 +63,8 @@ impl Service<Request<Body>> for HelloWorld {
 }
 
 // We start by first building a middleware for our HelloWorld service that will implement
-// the logging functionality
-// We had to include PhantomData to include the trait bound on `Service` generic
+// the logging functionality. IOW, how to build a tower service that logs initiation and completion
+// of a wrapped service, without heap allocations if possible
 #[derive(Clone, Copy)]
 struct Logger<Service> {
     inner: Service,
@@ -96,6 +96,8 @@ where
         // since we are mutably borrowing self
         let mut inner = self.inner.clone();
         let (method, uri) = (req.method().clone(), req.uri().clone());
+        // Creating a Box is an allocation , so imagine a hundred nested requests, which maybe possible
+        // for a Logger service, and imagine each have their own BoxFuture, allocations can deter performance
         Box::pin(async move {
             let log_id = unsafe { 
                 let log_id = LOG_ID + 1;
