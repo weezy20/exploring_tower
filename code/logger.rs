@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use core::future::{Future};
 use tower::Service;
-use hyper::{Body, Request, Response, Server};
+use hyper::{Request, Response, Server};
 use serde_json::Value;
 use std::pin::Pin;
 
