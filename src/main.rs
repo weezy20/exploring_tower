@@ -5,6 +5,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
 use rand::rngs::adapter::ReseedingRng;
 use serde_json::Value;
+use tokio::time::Instant;
 use std::convert::Infallible;
 use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -12,6 +13,11 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tower::Service;
 
+// Local imports
+mod logger;
+mod timeout;
+use timeout::Timeout;
+use logger::Logger;
 async fn shutdown_signal() {
     // Wait for the CTRL+C signal
     tokio::signal::ctrl_c()
@@ -25,7 +31,18 @@ async fn lazy_function(_req : Request<Body>) -> Result<Response<Body>, Infallibl
     Ok(
         Response::new(
             Body::from(
-                "Hello from lazy function"
+                "Hello from LAZY function"
+            )
+        )
+    )
+}
+
+
+async fn quick_function(_req : Request<Body>) -> Result<Response<Body>, Infallible> {
+    Ok(
+        Response::new(
+            Body::from(
+                "Hello from QUICK function"
             )
         )
     )
@@ -50,7 +67,8 @@ async fn main() {
             // For this we get rid of the trait bounds in our previous commit
             let service = HelloWorld;
             let service = service_fn(lazy_function);
-            let service = Logger::new(service);
+            let service = service_fn(quick_function);
+            let service = Timeout::new(Logger::new(service));
             // let service = Logger::new(service);
             // let service = Logger::new(service);
             // let service = Logger::new(service);
@@ -86,106 +104,3 @@ impl Service<Request<Body>> for HelloWorld {
     }
 }
 
-// We start by first building a middleware for our HelloWorld service that will implement
-// the logging functionality. IOW, how to build a tower service that logs initiation and completion
-// of a wrapped service, without heap allocations if possible
-#[derive(Clone, Copy)]
-struct Logger<Service> {
-    inner: Service,
-}
-impl<S> Logger<S> {
-    fn new(inner: S) -> Self {
-        Self { inner }
-    }
-}
-
-impl<InnerService,B> Service<Request<B>> for Logger<InnerService>
-where
-    InnerService: Service<Request<B>> + Clone + Send + 'static,
-    B: Send + 'static ,
-    // We shouldn't impose Unpin on InnerService because ServiceFn<_> which 
-    // is created by hyper's serve_fn isn't Unpin, so those services won't work with our logger
-    InnerService::Future : 'static + Send, 
-    {
-    // Logging takes the inner service, and just runs a timer to wait its completion, logs
-    // the result and then returns the response of the inner service
-    type Response = InnerService::Response;
-    type Error = InnerService::Error;
-    type Future = LoggerFuture<InnerService::Future>;
-        
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx)
-    }
-
-    /// Return the Future of the wrapped service, while logging
-    fn call(&mut self, req: Request<B>) -> Self::Future {
-        // since we are mutably borrowing self
-        // let inner = self.inner.clone();
-        let (method, uri) = (req.method().clone(), req.uri().clone());
-        // todo! rejigg this for non HTTP services
-        let mut data = serde_json::Map::new();
-        data.insert("method".to_string(), Value::from(method.as_str()));
-        data.insert("uri".to_string(), Value::from(uri.path()));
-        let extra_service_info = Some(ServiceInfo { data });
-
-        let log_id : u64 = rand::random();
-        log::info!("Received {method} {uri} request, dispatch log id: {log_id}");
-
-       LoggerFuture { extra_service_info, log_id, f : self.inner.call(req) }
-       
-    }
-}
-#[derive(Clone)]
-struct ServiceInfo {
-    data: serde_json::Map<String, Value>
-}
-
-
-#[pin_project::pin_project]
-/// Our own future provides concrete type definitions 
-/// which avoids BoxFuture heap allocs 
-struct LoggerFuture<InnerServiceFuture: Future> {
-    extra_service_info : Option<ServiceInfo>,
-    log_id: u64,
-    #[pin]
-    f: InnerServiceFuture
-}
-
-impl<F: Future> Future for LoggerFuture<F> {
-    type Output = <F as Future>::Output;
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let log_id = self.log_id;
-        // If our service is an HTTP service, we require this metadata
-        let (mut metadata_init , mut method, mut uri) = (false, Value::default(), Value::default());
-        if let Some(ref metadata) = self.extra_service_info {
-        
-            method = metadata.data.get("method").unwrap().clone();
-                 uri =   metadata.data.get("uri").unwrap().clone();
-                 metadata_init = true;
-    
-        }
-        // If inner service is a HTTP service 
-        let log_success_str = if metadata_init {
-            format!("HTTP Request {method} {uri} processed successfully from logger id {log_id}")
-        } else {
-            format!("Request processed successfully from logger id {log_id}")
-        };
-
-        let inner = self.project().f; // Move occurs here so we must get the metadata before 
-        let start = tokio::time::Instant::now();
-        // Start polling the inner future
-        if let Poll::Ready(fut) = inner.poll(cx) {
-            let end = tokio::time::Instant::now();
-            let duration = (end - start).as_millis();
-            log::info!("{}", log_success_str);
-            // We set our lazy function to take 2 seconds but logs show 0 milliseconds. WHY?
-            // Because we are creating the timer from within our LoggerFuture which may be put to sleep 
-            // while it's being awaited
-            log::debug!("Operation took {duration:?} milliseconds");
-            Poll::Ready(fut)
-        } else { 
-            Poll::Pending
-        }
-    }
-
-}
