@@ -17,9 +17,12 @@ use logger::Logger;
 use async_fns::*;
 use hello_world::HelloWorld;
 
+#[allow(unused)]
 #[tokio::main]
 async fn main() {
-    std::env::set_var("RUST_LOG", "tower_explorer=DEBUG");
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", "tower_explorer=DEBUG");
+    }
     env_logger::init();
     let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 3000);
     let make_service =
@@ -45,8 +48,8 @@ async fn main() {
 
             Ok::<_, Infallible>(service) });
     let server = Server::bind(&socket)
-                        .serve(make_service)
-                        .with_graceful_shutdown(shutdown_signal());
+                    .serve(make_service)
+                    .with_graceful_shutdown(shutdown_signal());
     if let Err(e) = server.await {
         eprintln!("Server Error : {e}");
     }

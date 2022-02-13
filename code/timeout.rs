@@ -1,11 +1,7 @@
 use core::future::Future;
-use hyper::body::SizeHint;
-use hyper::{Body, Request, Response, Server};
-use serde_json::Value;
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::time::{Duration, Instant};
+use tokio::time::Instant;
 use tower::{BoxError, Service};
 /// Timeout is a wrapper over a service that times how long a service
 /// takes to response and if exceeds a certain amount, responds with a Error
