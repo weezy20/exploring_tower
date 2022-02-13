@@ -20,7 +20,12 @@ use hello_world::HelloWorld;
 #[allow(unused)]
 #[tokio::main]
 async fn main() {
-    std::env::set_var("RUST_LOG", "tower_explorer=DEBUG");
+    if std::env::var("RUST_LOG").is_err() {
+        let val = format!("{}=DEBUG", module_path!().split("::").next().unwrap());
+        std::env::set_var("RUST_LOG", val );
+    } else {
+        println!("RUST_LOG Set");
+    }
     env_logger::init();
     let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 3000);
     let make_service =
@@ -37,11 +42,11 @@ async fn main() {
             // For this we get rid of the trait bounds in our previous commit
             let service = HelloWorld;
             let service = service_fn(quick_function);
-            // let service = service_fn(lazy_function);
-            // let service = Logger::new(service);
-            // let service = Logger::new(service);
-            // let service = Logger::new(service);
-            // let service = Logger::new(service);
+            let service = service_fn(lazy_function);
+            let service = Logger::new(service);
+            let service = Logger::new(service);
+            let service = Logger::new(service);
+            let service = Logger::new(service);
             let service = Timeout::new(Logger::new(service));
 
             Ok::<_, Infallible>(service) });
